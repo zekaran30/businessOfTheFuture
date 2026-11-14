@@ -17,3 +17,12 @@ From previous data we were able to gain meaningful insight as to why profit has 
  For wait time changes we plan to have a follow with clients who have had an unusual amount of wait time before their claim being dealt with.
 
  Montreal homes are subject to more water damage but the premium is the same as the other cities we should consider that.
+
+ ## Automation:
+
+### We planned alerts for certain conditions to handle inconsistencies as soon as possible and prevent losses. Alerts will go off under following conditions:
+- if a claim is handled and procedd before 15 days and the amount exceeds 4000$
+- if a claim made by broker 7 is over 8k but under 10k
+- if a customer has been waiting for their claim to be processed for over 45/50 days --> follows up with client to improve client retention.
+- if a claim is repeated by the same customer 3 or more times
+- if a claim is repeated by the same customer 2 or more times AND the same auditor is handling it
