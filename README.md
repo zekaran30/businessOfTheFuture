@@ -14,4 +14,6 @@ From previous data we were able to gain meaningful insight as to why profit has 
 
 ## Business Solutions:
  We suspect Broker 07 of commiting fraud insurance and to be subjected to review from senior staff. Claims have been approved too quickly as well as most of them being right under 10k the limit to pass to senior review. Most of the client retention issue also revolves on this Broker with over 1000% of cancelled renewals.
- For w
+ For wait time changes we plan to have a follow with clients who have had an unusual amount of wait time before their claim being dealt with.
+
+ Montreal homes are subject to more water damage but the premium is the same as the other cities we should consider that.
