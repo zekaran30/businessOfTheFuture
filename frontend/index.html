@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Millennium Mutual: money ledger</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📒</text></svg>">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="brand">
+      <span class="brand-name">Millennium Mutual</span>
+      <span class="brand-tool">Money ledger</span>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button role="tab" data-view="ledger" aria-selected="true">Ledger</button>
+      <button role="tab" data-view="quarter" aria-selected="false">New quarter</button>
+      <button role="tab" data-view="alerts" aria-selected="false">Alerts<span class="badge" id="alert-count"></span></button>
+      <button role="tab" data-view="notes" aria-selected="false">Data notes</button>
+    </nav>
+    <div class="asof">Data to <strong id="asof">…</strong></div>
+    <button class="icon-button" id="theme-toggle" type="button" aria-label="Switch between light and dark" title="Light or dark">
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg>
+    </button>
+  </header>
+
+  <!-- ============================================================ LEDGER -->
+  <section class="view active" id="view-ledger" role="tabpanel" aria-label="Ledger">
+    <div class="ledger-layout">
+      <aside class="rail" aria-label="Filters">
+        <div class="rail-head">
+          <h2>Filters</h2>
+          <button class="link-button" id="clear-filters" type="button">Clear all</button>
+        </div>
+        <div class="field-label">Period</div>
+        <div class="period">
+          <select id="period-from" aria-label="From quarter"></select>
+          <span>to</span>
+          <select id="period-to" aria-label="To quarter"></select>
+        </div>
+        <div id="filter-groups"></div>
+        <details class="group" id="assumptions-group">
+          <summary>Cost assumptions</summary>
+          <div class="assumption"><label for="a-expense">Operating costs, % of premium</label><input id="a-expense" type="number" min="0" max="60" step="1"></div>
+          <div class="assumption"><label for="a-commission">Broker commission, % of premium</label><input id="a-commission" type="number" min="0" max="40" step="0.5"></div>
+          <p class="hint" style="margin-top:.5rem">Not in the data. Set these to Millennium Mutual's actual rates; every result updates.</p>
+        </details>
+      </aside>
+
+      <div class="main" id="ledger-main">
+        <div class="active-filters" id="active-filters"></div>
+
+        <section class="dollar" aria-labelledby="dollar-title">
+          <h1 id="dollar-title">Where each premium dollar went</h1>
+          <p class="dollar-sub" id="dollar-sub"></p>
+          <div class="dollar-scale" id="dollar-scale" aria-hidden="true"></div>
+          <div class="dollar-bar" id="dollar-bar" role="img"></div>
+          <div class="dollar-legend" id="dollar-legend"></div>
+          <p class="dollar-summary" id="dollar-summary"></p>
+        </section>
+
+        <section class="totals" id="totals" aria-label="Totals"></section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Money in and money out, month by month</h2>
+            <p class="hint">Bars: premium earned against claims (paid and still open). Line: loss ratio, 3-month average.</p>
+          </div>
+          <div class="chart-box"><canvas id="chart-monthly" aria-label="Monthly premium and claims"></canvas></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Profit and loss by <select id="dim" aria-label="Group by"></select></h2>
+            <p class="hint">Click a row to filter to it. Click a column to sort.</p>
+          </div>
+          <div class="table-wrap"><table class="ledger" id="pl-table"></table></div>
+        </section>
+
+        <div class="two-up">
+          <section class="panel">
+            <div class="panel-head">
+              <h2 id="heat-title">Loss ratio by city and product</h2>
+            </div>
+            <div class="heat-controls">
+              <label>Rows <select id="heat-rows"></select></label>
+              <label>Columns <select id="heat-cols"></select></label>
+            </div>
+            <div class="table-wrap" id="heatmap"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Claim sizes around the $10,000 review line</h2>
+            </div>
+            <div class="chart-box short"><canvas id="chart-hist" aria-label="Claim size distribution"></canvas></div>
+            <p class="panel-note" id="hist-note"></p>
+          </section>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================= NEW QUARTER -->
+  <section class="view" id="view-quarter" role="tabpanel" aria-label="New quarter">
+    <div class="page">
+      <div class="page-intro">
+        <h1>Add a new quarter</h1>
+        <p>Drop in the latest extract from the policy and claims systems. It's cleaned with the same rules as the original data,
+          added to the ledger, and every part of the business is checked for losses. Alerts go out on their own.</p>
+      </div>
+
+      <div class="q-grid">
+        <form id="upload-form" novalidate>
+          <div class="drops">
+            <label class="drop" id="drop-policies">
+              <strong>Policies file</strong>
+              <span class="hint">CSV with the same columns as policies.csv</span>
+              <span class="file-name">Choose or drop a file</span>
+              <input type="file" id="file-policies" accept=".csv,text/csv">
+            </label>
+            <label class="drop" id="drop-claims">
+              <strong>Claims file</strong>
+              <span class="hint">CSV with the same columns as claims.csv</span>
+              <span class="file-name">Choose or drop a file</span>
+              <input type="file" id="file-claims" accept=".csv,text/csv">
+            </label>
+          </div>
+          <div class="row">
+            <label>Extract date <input type="date" id="as-of"></label>
+            <span class="hint">Leave blank to use the last day of the month of the latest record.</span>
+          </div>
+          <div class="row">
+            <button class="button primary" type="submit" id="upload-button">Upload and check</button>
+            <button class="button" type="button" id="sample-button">Use the sample 2026 Q4 extract</button>
+          </div>
+          <p class="hint" style="margin-top:.6rem">The sample is synthetic: ordinary business that matches the last four real quarters,
+            plus two planted events for the demo. Download it as
+            <a href="/api/sample/policies">policies_2026Q4.csv</a> and <a href="/api/sample/claims">claims_2026Q4.csv</a>
+            to try the upload yourself.</p>
+        </form>
+
+        <div>
+          <div class="side-box">
+            <h2>Add one record by hand</h2>
+            <p>For a late policy or a single claim. The check re-runs for its quarter.</p>
+            <div class="seg-toggle" role="group" aria-label="Record type">
+              <button type="button" data-kind="policy" aria-pressed="true">Policy</button>
+              <button type="button" data-kind="claim" aria-pressed="false">Claim</button>
+            </div>
+            <form id="manual-policy" class="form-grid">
+              <label>City<select name="city" required></select></label>
+              <label>Product<select name="policy_type"><option>Auto</option><option>Home</option></select></label>
+              <label>Risk band<select name="risk_band"><option>Low</option><option>Medium</option><option>High</option></select></label>
+              <label>Channel<select name="channel"><option>Agent</option><option>Broker</option><option>Online</option></select></label>
+              <label>Broker code<input type="text" name="broker_code" placeholder="e.g. B11" disabled></label>
+              <label>Start date<input type="date" name="start_date" required></label>
+              <label>Annual premium ($)<input type="number" name="annual_premium" min="1" step="0.01" required></label>
+              <label>Deductible<select name="deductible"><option>500</option><option selected>1000</option><option>2500</option></select></label>
+              <label>Customer age<input type="number" name="customer_age" min="16" max="100"></label>
+              <label>Policy ID<input type="text" name="policy_id" placeholder="Leave blank to create one"></label>
+              <div class="wide"><button class="button primary" type="submit">Add policy</button></div>
+            </form>
+            <form id="manual-claim" class="form-grid" hidden>
+              <label class="wide">Policy ID<input type="text" name="policy_id" placeholder="e.g. POL-04210" required></label>
+              <label>Loss date<input type="date" name="loss_date" required></label>
+              <label>Reported date<input type="date" name="reported_date" required></label>
+              <label>Claim type<select name="claim_type"></select></label>
+              <label>Claim amount ($)<input type="number" name="claim_amount" min="0" step="0.01" required></label>
+              <label>Status<select name="status"><option>Open</option><option>Paid</option><option>Denied</option><option>Under Review</option></select></label>
+              <label>Adjuster team<select name="adjuster_team"><option>Team A</option><option>Team B</option><option>Team C</option></select></label>
+              <label>Paid amount ($)<input type="number" name="paid_amount" min="0" step="0.01"></label>
+              <label>Closed date<input type="date" name="closed_date"></label>
+              <div class="wide"><button class="button primary" type="submit">Add claim</button></div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <details class="more" id="check-settings">
+        <summary>Check any quarter, or try different alert lines</summary>
+        <p class="hint" style="margin-top:.4rem">Preview shows what would be flagged without sending anything.
+          Lower the lines to see more flags, raise them to see only the biggest problems.</p>
+        <div class="rules-grid">
+          <label>Quarter<select id="check-quarter"></select></label>
+          <label>Money at stake, at least ($)<input type="number" id="r-materiality" min="0" step="1000"></label>
+          <label>Chance of bad luck, under<select id="r-confidence"><option value="0.9">10%</option><option value="0.95">5%</option><option value="0.99">1%</option></select></label>
+          <label>Premium earned, at least ($)<input type="number" id="r-min_earned" min="0" step="1000"></label>
+          <label>Claims, at least<input type="number" id="r-min_claims" min="1" step="1"></label>
+          <label>Cap single claims at ($)<input type="number" id="r-large_loss_cap" min="1000" step="1000"></label>
+          <label>Getting worse: up by points<input type="number" id="r-worsening_points" min="1" step="1"></label>
+          <label>Claims at $9,000–9,999, share (%)<input type="number" id="r-band_min_share" min="1" max="100" step="1"></label>
+        </div>
+        <div class="row">
+          <button class="button" type="button" id="preview-button">Preview</button>
+          <button class="button primary" type="button" id="run-button">Check and send alerts</button>
+        </div>
+      </details>
+
+      <div class="result" id="q-result" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ ALERTS -->
+  <section class="view" id="view-alerts" role="tabpanel" aria-label="Alerts">
+    <div class="page">
+      <div class="page-intro">
+        <h1>Alerts</h1>
+        <p>Every flag the check raised, who it went to, and where it stands. Repeat checks update an alert rather than duplicating it.</p>
+      </div>
+      <div class="toolbar">
+        <label class="hint" for="alert-filter">Show</label>
+        <select id="alert-filter"><option value="">All alerts</option><option>New</option><option>Acknowledged</option><option>Resolved</option></select>
+      </div>
+      <div id="alerts-body"></div>
+      <section class="outbox">
+        <h2>Messages sent</h2>
+        <p class="hint" style="margin-top:.3rem">One message per person per check, only for new alerts. Set ALERT_WEBHOOK_URL to also post them to a team chat.</p>
+        <div id="outbox-body"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ======================================================== DATA NOTES -->
+  <section class="view" id="view-notes" role="tabpanel" aria-label="Data notes">
+    <div class="page">
+      <div class="page-intro">
+        <h1>Data notes</h1>
+        <p>What was fixed in the raw extracts, how every number is calculated, and what the data can't tell us.</p>
+      </div>
+      <section class="panel">
+        <h2>How the original extract was cleaned</h2>
+        <div class="table-wrap" style="margin-top:.8rem"><table class="ledger notes-table" id="notes-table"></table></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>Extracts added since</h2><button class="button danger" type="button" id="reset-button">Remove added data and alerts</button></div>
+        <div id="batches-body"></div>
+      </section>
+      <section class="panel">
+        <h2>How the numbers work</h2>
+        <dl class="defs">
+          <dt>Premium written</dt><dd>Annual premium of policies that start in the period. This is what sales see.</dd>
+          <dt>Premium earned</dt><dd>The part of each annual premium that covers days inside the period (premium × days covered ÷ 365). A policy sold last month has only earned a month. This is the fair yardstick for claims.</dd>
+          <dt>Claims paid</dt><dd>Money paid on claims whose loss happened in the period, after the deductible.</dd>
+          <dt>Open claims</dt><dd>Claims not settled yet, set aside at the claim amount minus the deductible. Prudent: historically about 95% of that is paid.</dd>
+          <dt>Loss ratio</dt><dd>Claims (paid plus open) ÷ premium earned.</dd>
+          <dt>Commission and costs</dt><dd>Assumptions, not in the data: broker commission on premium sold by brokers, and operating costs on all premium. Change them under Filters.</dd>
+          <dt>Result after costs</dt><dd>Premium earned minus claims, commission and operating costs. Shown in parentheses and red ink when negative.</dd>
+          <dt>Combined ratio</dt><dd>(Claims + commission + costs) ÷ premium earned. Above 100% means losing money.</dd>
+          <dt>Chance of bad luck</dt><dd>How likely a loss this size is from normal randomness alone, using the book's own claim sizes over the last year (a compound Poisson model). The check only flags losses where this is under 5%.</dd>
+        </dl>
+      </section>
+      <section class="panel">
+        <h2>What the data can't tell us</h2>
+        <ul class="limits">
+          <li>Operating costs and commission rates aren't in the extract, so results after costs depend on the assumptions.</li>
+          <li>Cancelled policies have no cancellation date, so they're counted as covered for the full year (2.9% of policies).</li>
+          <li>Renewal terms aren't separate rows: every claim in the data falls in a policy's first year, so only first-year premium is counted.</li>
+          <li>Claims for the most recent months are still coming in, so the latest quarter can look better than it will end up.</li>
+          <li>A cluster of claims under $10,000 is a reason to review, not proof of fraud.</li>
+        </ul>
+      </section>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="/static/vendor/chart.umd.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
