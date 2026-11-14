@@ -23,6 +23,8 @@ const state = {
   manualKind: "policy",
   lastCheck: null,
   checkLens: "where",
+  cnDim: "source",
+  cnMetric: "avg",
 };
 
 const FILTER_GROUPS = [
@@ -32,11 +34,11 @@ const FILTER_GROUPS = [
   { title: "Customer", open: false, fields: [["age_band", "Age"], ["renewal_status", "Renewal status"]] },
   {
     title: "Claims only", open: false, note: "These narrow the money going out, not the premium.",
-    fields: [["claim_type", "Claim type"], ["adjuster_team", "Adjuster team"], ["status", "Claim status"]],
+    fields: [["claim_number", "Claim number"], ["claim_type", "Claim type"], ["adjuster_team", "Adjuster team"], ["status", "Claim status"]],
   },
 ];
 const FIELD_LABEL = Object.fromEntries(FILTER_GROUPS.flatMap((g) => g.fields));
-const NATURAL_ORDER = new Set(["risk_band", "age_band", "deductible", "renewal_status"]);
+const NATURAL_ORDER = new Set(["risk_band", "age_band", "deductible", "renewal_status", "claim_number"]);
 
 /* ---------------------------------------------------------------- format */
 function money(x) {
@@ -87,31 +89,24 @@ function toast(message, error = false) {
 }
 
 /* ----------------------------------------------------------------- theme */
-function currentTheme() {
-  const forced = document.documentElement.dataset.theme;
-  if (forced) return forced;
-  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-function initTheme() {
-  try { const saved = localStorage.getItem("mm-theme"); if (saved) document.documentElement.dataset.theme = saved; } catch (e) { /* ignore */ }
-  $("#theme-toggle").addEventListener("click", () => {
-    const next = currentTheme() === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    try { localStorage.setItem("mm-theme", next); } catch (e) { /* ignore */ }
-    applyChartDefaults();
-    if (state.data) renderLedger();
-    if (state.lastCheck) renderCheckChart();
-  });
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    applyChartDefaults();
-    if (state.data) renderLedger();
-  });
-}
+const glowPlugin = {  // neon glow on line datasets
+  id: "neonGlow",
+  beforeDatasetDraw(chart, args) {
+    const ds = chart.data.datasets[args.index];
+    if ((ds.type || chart.config.type) !== "line") return;
+    chart.ctx.save(); chart.ctx.shadowColor = ds.borderColor; chart.ctx.shadowBlur = 12;
+  },
+  afterDatasetDraw(chart, args) {
+    const ds = chart.data.datasets[args.index];
+    if ((ds.type || chart.config.type) === "line") chart.ctx.restore();
+  },
+};
 function applyChartDefaults() {
   Chart.defaults.font.family = cssVar("--font");
   Chart.defaults.font.size = 12;
   Chart.defaults.color = cssVar("--ink-2");
-  Chart.defaults.borderColor = cssVar("--rule");
+  Chart.defaults.borderColor = "rgba(0, 240, 255, 0.12)";
+  Chart.register(glowPlugin);
 }
 
 /* ----------------------------------------------------------------- views */
@@ -155,6 +150,8 @@ async function loadMeta() {
   }
   $("#heat-rows").value = state.heatRows;
   $("#heat-cols").value = state.heatCols;
+  $("#cn-dim").innerHTML = policyDims.map((d) => `<option value="${d.value}">${esc(d.label.toLowerCase())}</option>`).join("");
+  $("#cn-dim").value = state.cnDim;
 
   $("#a-expense").value = Math.round(state.assumptions.expense_ratio * 100);
   $("#a-commission").value = +(state.assumptions.broker_commission * 100).toFixed(1);
@@ -248,7 +245,7 @@ async function loadLedger() {
   try {
     const data = await postJSON("/api/ledger", {
       filters: { ...state.filters, period_from: state.periodFrom, period_to: state.periodTo },
-      dim: state.dim, heat_rows: state.heatRows, heat_cols: state.heatCols, assumptions: state.assumptions,
+      dim: state.dim, heat_rows: state.heatRows, heat_cols: state.heatCols, assumptions: state.assumptions, cn_dim: state.cnDim,
     });
     if (id !== state.request) return;
     state.data = data;
@@ -267,6 +264,7 @@ function renderLedger() {
   renderTable();
   renderHeatmap();
   renderHist();
+  renderClaimNumbers();
 }
 
 function renderDollar() {
@@ -376,7 +374,7 @@ function renderMonthly() {
         { type: "bar", label: "Premium earned", data: m.map((x) => x.earned), backgroundColor: cssVar("--in"), stack: "in", order: 3, barPercentage: 0.9, categoryPercentage: 0.75 },
         { type: "bar", label: "Claims paid", data: m.map((x) => x.paid), backgroundColor: cssVar("--paid"), stack: "out", order: 3, barPercentage: 0.9, categoryPercentage: 0.75 },
         { type: "bar", label: "Open claims", data: m.map((x) => x.reserve), backgroundColor: cssVar("--open"), stack: "out", order: 3, barPercentage: 0.9, categoryPercentage: 0.75 },
-        { type: "line", label: "Loss ratio, 3-month average", data: lr3, yAxisID: "y2", borderColor: cssVar("--ink"), backgroundColor: cssVar("--ink"), borderWidth: 2, pointRadius: 2, tension: 0.25, order: 1, spanGaps: true },
+        { type: "line", label: "Loss ratio, 3-month average", data: lr3, yAxisID: "y2", borderColor: cssVar("--magenta"), backgroundColor: cssVar("--magenta"), borderWidth: 2, pointRadius: 2, tension: 0.25, order: 1, spanGaps: true },
         { type: "line", label: "Break-even loss ratio", data: m.map(() => be), yAxisID: "y2", borderColor: cssVar("--red"), borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, order: 2 },
       ],
     },
@@ -404,6 +402,7 @@ function tableColumns(scope) {
       ["paid", "Claims paid", (r) => money(r.paid)],
       ["reserve", "Open claims", (r) => money(r.reserve)],
       ["incurred", "Total claims", (r) => money(r.incurred)],
+      ["avg_claim", "Average claim", (r) => money(r.avg_claim)],
       ["incurred_share", "Share of claim cost", (r) => pct(r.incurred_share)],
       ["loss_ratio_points", "Loss ratio points", (r) => (r.loss_ratio_points == null ? "–" : (r.loss_ratio_points * 100).toFixed(1))],
       ["settle_days", "Median days to settle", (r) => (r.settle_days == null ? "–" : Math.round(r.settle_days))],
@@ -466,7 +465,7 @@ function renderTable() {
     foot = `<tfoot><tr><td>Total</td><td class="num">${int(t.policies_written)}</td><td class="num">${money(t.earned)}</td><td class="num">${money(t.paid)}</td><td class="num">${money(t.reserve)}</td><td class="num">${money(t.commission + t.expenses)}</td><td class="${moneyClass(t.result)}">${money(t.result)}</td><td class="num${t.loss_ratio > be ? " loss" : ""}">${pct(t.loss_ratio)}</td><td></td></tr></tfoot>`;
   } else {
     const sum = (k) => rows.reduce((s, r) => s + (r[k] || 0), 0);
-    foot = `<tfoot><tr><td>Total</td><td class="num">${int(sum("claims"))}</td><td class="num">${money(sum("paid"))}</td><td class="num">${money(sum("reserve"))}</td><td class="num">${money(sum("incurred"))}</td><td class="num">100%</td><td class="num">${t.earned ? (sum("incurred") / t.earned * 100).toFixed(1) : "–"}</td><td></td></tr></tfoot>`;
+    foot = `<tfoot><tr><td>Total</td><td class="num">${int(sum("claims"))}</td><td class="num">${money(sum("paid"))}</td><td class="num">${money(sum("reserve"))}</td><td class="num">${money(sum("incurred"))}</td><td class="num">${money(sum("claims") ? sum("incurred") / sum("claims") : null)}</td><td class="num">100%</td><td class="num">${t.earned ? (sum("incurred") / t.earned * 100).toFixed(1) : "–"}</td><td></td></tr></tfoot>`;
   }
   const table = $("#pl-table");
   table.innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}`;
@@ -536,12 +535,12 @@ const reviewLinePlugin = {
     const pos = (x.getPixelForTick(9) + x.getPixelForTick(10)) / 2;
     const ctx = chart.ctx;
     ctx.save();
-    ctx.strokeStyle = cssVar("--ink");
+    ctx.strokeStyle = cssVar("--amber");
     ctx.setLineDash([5, 4]);
     ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(pos, area.top - 4); ctx.lineTo(pos, area.bottom); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = cssVar("--ink");
+    ctx.fillStyle = cssVar("--amber");
     ctx.font = `600 12px ${cssVar("--font")}`;
     ctx.textAlign = "left";
     ctx.fillText("Senior review from $10,000", pos + 6, area.top + 10);
@@ -551,7 +550,7 @@ const reviewLinePlugin = {
 function renderHist() {
   const h = state.data.histogram;
   const suspicious = h.band_count >= 4 && h.book_band_share != null && h.band_share > Math.max(0.12, 2 * h.book_band_share);
-  const colors = h.bins.map((b) => (b.lo === 9000 ? (suspicious ? cssVar("--red") : cssVar("--ink")) : cssVar("--paid")));
+  const colors = h.bins.map((b) => (b.lo === 9000 ? (suspicious ? cssVar("--red") : cssVar("--amber")) : cssVar("--paid")));
   makeChart("hist", $("#chart-hist"), {
     type: "bar",
     data: {
@@ -574,6 +573,45 @@ function renderHist() {
   if (Object.keys(state.filters).length && h.book_band_share != null) note += ` Across the whole book in this period the share is ${pct(h.book_band_share)}.`;
   if (suspicious) note = `<strong class="loss">Claims bunch up just under the senior-review line.</strong> ` + note;
   $("#hist-note").innerHTML = note;
+}
+
+function renderClaimNumbers() {
+  const cn = state.data.claim_numbers;
+  if (!cn) return;
+  const metric = state.cnMetric, rows = cn.rows.slice(0, 12), B = ["1st", "2nd", "3rd+"];
+  const col = { "1st": cssVar("--cyan"), "2nd": cssVar("--amber"), "3rd+": cssVar("--magenta") };
+  const val = (b) => (metric === "avg" ? b.avg : metric === "total" ? b.incurred : b.claims);
+  const stacked = metric !== "avg";
+  makeChart("cn", $("#chart-cn"), {
+    type: "bar",
+    data: { labels: rows.map((r) => r.label), datasets: B.map((b) => ({ label: `${b} claim`, data: rows.map((r) => val(r.buckets[b]) ?? null), backgroundColor: rows.map((r) => (metric === "avg" && r.buckets[b].claims < 3 ? col[b] + "4d" : col[b])), stack: stacked ? "s" : b, barPercentage: 0.9, categoryPercentage: 0.8 })) },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 12, boxHeight: 12 } },
+        tooltip: { callbacks: { label: (c) => { const b = rows[c.dataIndex].buckets[B[c.datasetIndex]]; return `${B[c.datasetIndex]} claims: ${int(b.claims)}, average ${money(b.avg)}, total ${money(b.incurred)}`; } } },
+      },
+      scales: { x: { stacked, grid: { display: false } }, y: { stacked, ticks: { callback: (v) => (metric === "count" ? v : money(v)) }, title: { display: true, text: metric === "count" ? "Claims" : "Dollars" } } },
+      onClick: (e, els) => {
+        if (!els.length) return;
+        const update = {};
+        for (const [k, v] of Object.entries(rows[els[0].index].key)) update[k] = [k === "deductible" ? Number(v) : v];
+        setFilters(update);
+      },
+    },
+  });
+  const o = cn.overall, f = o["1st"], s2 = o["2nd"], t = o["3rd+"];
+  const total = f.incurred + s2.incurred + t.incurred;
+  let note = `1st claims: ${int(f.claims)}, averaging ${money(f.avg)}. 2nd claims: ${int(s2.claims)}, averaging ${money(s2.avg)}. 3rd+ claims: ${int(t.claims)}, averaging ${money(t.avg)}.`;
+  if (s2.claims + t.claims > 0 && total > 0 && f.avg) {
+    const later = (s2.incurred + t.incurred) / (s2.claims + t.claims);
+    if (later > f.avg * 1.05) note += ` Later claims cost ${pct(later / f.avg - 1)} more each.`;
+    else if (later < f.avg * 0.95) note += " Later claims are smaller on average: repeat claimants cost more because they claim more often, not because each claim is bigger.";
+    else note += " Later claims cost about the same each.";
+    note += ` Repeat claims are ${pct((s2.incurred + t.incurred) / total)} of the claim cost in this selection.`;
+  }
+  if (metric === "avg") note += " Faded bars rest on fewer than 3 claims: too few to read much into.";
+  $("#cn-note").textContent = note;
 }
 
 function bindLedger() {
@@ -609,6 +647,12 @@ function bindLedger() {
   };
   $("#a-expense").addEventListener("input", readAssumptions);
   $("#a-commission").addEventListener("input", readAssumptions);
+  $("#cn-dim").addEventListener("change", (e) => { state.cnDim = e.target.value; scheduleLedger(0); });
+  $$("[data-cn]").forEach((b) => b.addEventListener("click", () => {
+    state.cnMetric = b.dataset.cn;
+    $$("[data-cn]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    renderClaimNumbers();
+  }));
 }
 
 /* ----------------------------------------------------------- new quarter */
@@ -650,9 +694,9 @@ function bindQuarter() {
     });
   });
 
-  $$(".seg-toggle button").forEach((b) => b.addEventListener("click", () => {
+  $$("[data-kind]").forEach((b) => b.addEventListener("click", () => {
     state.manualKind = b.dataset.kind;
-    $$(".seg-toggle button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    $$("[data-kind]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     $("#manual-policy").hidden = state.manualKind !== "policy";
     $("#manual-claim").hidden = state.manualKind !== "claim";
   }));
@@ -742,6 +786,14 @@ function renderCheckResult(payload) {
   } else {
     html += `<p class="hint" style="margin:1rem 0">Preview only: nothing was logged or sent.</p>`;
   }
+  if (payload.watch) {
+    const w = payload.watch, L = w.claim_new_by_level || {}, P = w.retention_new_by_priority || {};
+    const lv = ["1", "2", "3", "4"].filter((l) => L[l]).map((l) => `level ${l}: ${L[l]}`).join(", ");
+    const pr = PRIORITIES.filter((x) => P[x]).map((x) => `${x.toLowerCase()}: ${P[x]}`).join(", ");
+    html += `<div class="actions-taken"><span><b>${w.claim_new}</b>new claim alert${w.claim_new === 1 ? "" : "s"}${lv ? ` (${lv})` : ""}</span>
+      <span><b>${w.retention_new}</b>new client${w.retention_new === 1 ? "" : "s"} to call${pr ? ` (${pr})` : ""}</span>
+      <button class="link-button" type="button" id="see-watch">Open the alert center</button></div>`;
+  }
   if (check.set_aside && check.set_aside.length) {
     html += `<p class="hint">${esc(check.set_aside.join(", "))} ${check.set_aside.length === 1 ? "is" : "are"} set aside from the city and pricing views, so ${check.set_aside.length === 1 ? "its" : "their"} claims aren’t flagged three times.</p>`;
   }
@@ -762,7 +814,9 @@ function renderCheckResult(payload) {
   $("#check-lens").value = state.checkLens;
   $("#check-lens").addEventListener("change", (e) => { state.checkLens = e.target.value; renderCheckChart(); });
   const see = $("#see-alerts");
-  if (see) see.addEventListener("click", () => showView("alerts"));
+  if (see) see.addEventListener("click", () => { watch.sub = "segments"; showView("alerts"); });
+  const sw = $("#see-watch");
+  if (sw) sw.addEventListener("click", () => { watch.sub = "claims"; showView("alerts"); });
   $$("[data-show]", box).forEach((b) => b.addEventListener("click", () => showInLedger(JSON.parse(b.dataset.show), check.quarter)));
   $$("[data-review]", box).forEach((b) => b.addEventListener("click", () => {
     const f = check.flags.find((x) => x.id === b.dataset.review);
@@ -858,47 +912,257 @@ function downloadCSV(rows, filename) {
 }
 
 /* ---------------------------------------------------------------- alerts */
+const watch = { data: null, seg: null, sub: "claims", claimShown: 60, retShown: 60 };
+const LEVEL_NAMES = { 1: "Critical", 2: "High", 3: "Medium", 4: "Low" };
+const PRIORITIES = ["Urgent", "High", "Standard", "Win-back"];
+const PRIORITY_NOTE = { Urgent: "Still waiting, past the limit", High: "Waited too long; renewal still to come", Standard: "Waited too long, but renewed", "Win-back": "Waited too long, then left" };
+const RULE_KEYS = ["watchlist", "repeat_claims", "repeat_claims_watched", "band_low", "band_high", "fast_amount", "fast_days", "ret_small", "ret_small_days", "ret_mid_days", "ret_large", "ret_large_days"];
+const levelColors = () => ({ 1: cssVar("--red"), 2: cssVar("--amber"), 3: cssVar("--cyan"), 4: cssVar("--steel") });
+const priorityColors = () => ({ Urgent: cssVar("--magenta"), High: cssVar("--amber"), Standard: cssVar("--cyan"), "Win-back": cssVar("--violet") });
+const priClass = (p) => "pri-" + p.toLowerCase().replace(/[^a-z]+/g, "-");
+const flatAlert = (a) => { const o = { ...a }; for (const k of ["reasons", "rules", "owners"]) if (Array.isArray(o[k])) o[k] = o[k].join(" | "); delete o.key; return o; };
+const today = () => new Date().toISOString().slice(0, 10);
+
+function sortAlerts(list, mode, rank, tieDate) {
+  const opened = (a) => a.opened_at || a.created_at || "";
+  const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+  const byDate = (a, b) => cmp(opened(a), opened(b)) || cmp(a[tieDate] || "", b[tieDate] || "");
+  const out = [...list];
+  if (mode === "level-asc") out.sort((a, b) => rank(b) - rank(a) || byDate(b, a));
+  else if (mode === "date-desc") out.sort((a, b) => byDate(b, a) || rank(a) - rank(b));
+  else if (mode === "date-asc") out.sort((a, b) => byDate(a, b) || rank(a) - rank(b));
+  else out.sort((a, b) => rank(a) - rank(b) || byDate(b, a));
+  return out;
+}
+const openedText = (a) => `opened ${String(a.opened_at || a.created_at || "").replace("T", " ").slice(0, 16)}`;
+const SEVERITY_RANK = { critical: 0, high: 1, watch: 2 };
+
 async function loadAlerts() {
   try {
-    const data = await api("/api/alerts");
-    renderAlerts(data);
+    const [w, seg] = await Promise.all([api("/api/watch"), api("/api/alerts")]);
+    watch.data = w; watch.seg = seg;
+    renderAlertCenter();
   } catch (err) { toast(err.message, true); }
 }
-function renderAlerts(data) {
-  const filter = $("#alert-filter").value;
-  const items = data.alerts.filter((a) => !filter || a.workflow === filter);
+function renderAlertCenter() {
+  const w = watch.data;
+  $("#watch-ran").textContent = `Last run: ${w.trigger}, ${w.ran_at.replace("T", " ").slice(0, 16)}. ${int(w.claims.length)} claim alerts and ${int(w.retention.length)} clients to call.`;
+  $("#sub-count-claims").textContent = w.claims.filter((a) => a.workflow === "New").length || "";
+  $("#sub-count-retention").textContent = w.retention.filter((a) => a.workflow === "To call").length || "";
+  $("#sub-count-segments").textContent = watch.seg.alerts.filter((a) => a.workflow === "New").length || "";
+  fillWatchOptions();
+  renderClaimTiles(); renderClaimTable();
+  renderRetTiles(); renderRetTable();
+  renderSegmentAlerts(); renderOutbox(); renderRules();
+  showSub(watch.sub);
+}
+function showSub(name) {
+  watch.sub = name;
+  $$(".subtabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.sub === name)));
+  $$(".subpane").forEach((p) => { p.hidden = p.id !== "sub-" + name; });
+  if (!watch.data) return;
+  if (name === "claims") renderClaimChart();
+  if (name === "retention") renderRetChart();
+}
+function fillWatchOptions() {
+  const w = watch.data;
+  const fill = (id, values, allLabel) => {
+    const el = $(id), cur = el.value;
+    el.innerHTML = `<option value="">${allLabel}</option>` + values.map((v) => `<option>${esc(v)}</option>`).join("");
+    el.value = values.includes(cur) ? cur : "";
+  };
+  const sources = [...new Set(w.claims.map((a) => a.source))].sort((a, b) => (/^B\d/.test(a) - /^B\d/.test(b)) || a.localeCompare(b));
+  fill("#f-source", sources, "All brokers and channels");
+  fill("#f-team", [...new Set(w.retention.map((a) => a.adjuster_team).filter(Boolean))].sort(), "All teams");
+  fill("#f-cstatus", w.statuses.claims, "Any status");
+  fill("#f-rstatus", w.statuses.retention, "Any status");
+}
+function statusSelect(a, statuses) {
+  return `<select data-key="${esc(a.key)}" aria-label="Status">${statuses.map((x) => `<option ${x === a.workflow ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>`;
+}
+function bindStatusSelects(tableSel, list) {
+  $$(`${tableSel} select[data-key]`).forEach((sel) => sel.addEventListener("change", async () => {
+    try {
+      await postJSON("/api/watch/status", { key: sel.dataset.key, status: sel.value });
+      const a = list.find((x) => x.key === sel.dataset.key);
+      if (a) a.workflow = sel.value;
+      $("#sub-count-claims").textContent = watch.data.claims.filter((x) => x.workflow === "New").length || "";
+      $("#sub-count-retention").textContent = watch.data.retention.filter((x) => x.workflow === "To call").length || "";
+      toast(`Marked ${sel.value.toLowerCase()}.`);
+      refreshBadge();
+    } catch (err) { toast(err.message, true); }
+  }));
+}
+
+/* claim alerts */
+function filteredClaims() {
+  const lvl = $("#f-level").value, src = $("#f-source").value, st = $("#f-cstatus").value, q = $("#f-csearch").value.trim().toLowerCase();
+  return sortAlerts(watch.data.claims.filter((a) => (!lvl || String(a.level) === lvl) && (!src || a.source === src) && (!st || a.workflow === st)
+    && (!q || [a.claim_id, a.customer_id, a.policy_id].some((x) => String(x).toLowerCase().includes(q)))), $("#f-csort").value, (a) => a.level, "loss_date");
+}
+function renderClaimTiles() {
+  const lv = watch.data.summary.levels, f = $("#f-level").value, wl = watch.data.settings.watchlist.join(", ") || "none";
+  $("#claim-tiles").innerHTML = ["1", "2", "3", "4"].map((l) => `<button type="button" class="tile" data-level="${l}" aria-pressed="${f === l}">
+      <span class="lvl lvl-${l}">Level ${l}: ${LEVEL_NAMES[l]}</span>
+      <span class="tile-count">${int(lv[l].count)}</span>
+      <span class="tile-sub">${esc(lv[l].rule)}${l === "1" ? ` (${esc(wl)})` : ""}</span>
+      <span class="tile-sub">${money(lv[l].amount)} claimed, ${money(lv[l].paid)} paid</span></button>`).join("");
+  $$("#claim-tiles .tile").forEach((t) => t.addEventListener("click", () => {
+    const sel = $("#f-level");
+    sel.value = sel.value === t.dataset.level ? "" : t.dataset.level;
+    watch.claimShown = 60; renderClaimTiles(); renderClaimTable();
+  }));
+}
+function renderClaimTable() {
+  const rows = filteredClaims(), shown = rows.slice(0, watch.claimShown), isNew = new Set(watch.data.new_keys || []);
+  $("#claim-count").textContent = `${int(shown.length)} of ${int(rows.length)} shown`;
+  $("#claim-table").innerHTML = `<thead><tr><th>Level</th><th>Claim</th><th>Customer</th><th>Broker</th><th>Where</th><th>Type</th>
+      <th class="n">Amount</th><th class="n">Paid</th><th class="n">Days to settle</th><th class="n">Claim no.</th><th>Why it’s flagged</th><th>Status</th></tr></thead>
+    <tbody>${shown.map((a) => `<tr class="${isNew.has(a.key) ? "is-new" : ""}">
+      <td><span class="lvl lvl-${a.level}">L${a.level}</span><div class="hint">${openedText(a)}</div></td>
+      <td><span class="seg-name">${esc(a.claim_id)}</span><div class="hint">${esc(a.loss_date)}</div></td>
+      <td>${esc(a.customer_id)}</td><td>${esc(a.source)}</td><td>${esc(a.city)} ${esc(a.policy_type)}</td><td>${esc(a.claim_type)}</td>
+      <td class="num">${moneyFull(a.claim_amount)}</td><td class="num">${moneyFull(a.paid)}</td>
+      <td class="num">${a.days_to_settle == null ? "open" : a.days_to_settle}</td><td class="num">${esc(a.claim_number)}</td>
+      <td class="why"><ul>${a.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul><div class="hint">${esc(a.action)}</div></td>
+      <td>${statusSelect(a, watch.data.statuses.claims)}</td></tr>`).join("") || `<tr><td colspan="12" class="hint">No claim alerts match these filters.</td></tr>`}</tbody>`;
+  $("#claim-more").hidden = rows.length <= watch.claimShown;
+  bindStatusSelects("#claim-table", watch.data.claims);
+}
+function renderClaimChart() {
+  const c = watch.data.summary.chart_claims, col = levelColors();
+  makeChart("claimAlerts", $("#chart-claim-alerts"), {
+    type: "bar",
+    data: { labels: c.labels, datasets: ["1", "2", "3", "4"].map((l) => ({ label: `Level ${l}: ${LEVEL_NAMES[l]}`, data: c.series[l], backgroundColor: col[l], stack: "a" })) },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { position: "bottom", labels: { boxWidth: 12, boxHeight: 12 } } },
+      scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, ticks: { precision: 0 }, title: { display: true, text: "Alerts" } } },
+      onClick: (e, els) => { if (els.length) { $("#f-source").value = c.labels[els[0].index]; watch.claimShown = 60; renderClaimTable(); } },
+    },
+  });
+}
+
+/* retention calls */
+function filteredRet() {
+  const pr = $("#f-priority").value, team = $("#f-team").value, st = $("#f-rstatus").value, q = $("#f-rsearch").value.trim().toLowerCase();
+  return sortAlerts(watch.data.retention.filter((a) => (!pr || a.priority === pr) && (!team || a.adjuster_team === team) && (!st || a.workflow === st)
+    && (!q || [a.claim_id, a.customer_id, a.policy_id].some((x) => String(x).toLowerCase().includes(q)))), $("#f-rsort").value, (a) => PRIORITIES.indexOf(a.priority), "reported_date");
+}
+function renderRetTiles() {
+  const pr = watch.data.summary.priorities, f = $("#f-priority").value;
+  $("#ret-tiles").innerHTML = PRIORITIES.map((p) => `<button type="button" class="tile" data-priority="${p}" aria-pressed="${f === p}">
+      <span class="lvl ${priClass(p)}">${p}</span><span class="tile-count">${int(pr[p].count)}</span>
+      <span class="tile-sub">${PRIORITY_NOTE[p]}</span></button>`).join("");
+  $$("#ret-tiles .tile").forEach((t) => t.addEventListener("click", () => {
+    const sel = $("#f-priority");
+    sel.value = sel.value === t.dataset.priority ? "" : t.dataset.priority;
+    watch.retShown = 60; renderRetTiles(); renderRetTable();
+  }));
+}
+function renderRetTable() {
+  const rows = filteredRet(), shown = rows.slice(0, watch.retShown), isNew = new Set(watch.data.new_keys || []);
+  $("#ret-count").textContent = `${int(shown.length)} of ${int(rows.length)} shown`;
+  $("#ret-table").innerHTML = `<thead><tr><th>Priority</th><th>Customer</th><th>Claim</th><th>Team</th><th>Where</th>
+      <th class="n">Amount</th><th class="n">Waited</th><th>Claim status</th><th>Customer status</th><th>What to do</th><th>Status</th></tr></thead>
+    <tbody>${shown.map((a) => `<tr class="${isNew.has(a.key) ? "is-new" : ""}">
+      <td><span class="lvl ${priClass(a.priority)}">${esc(a.priority)}</span><div class="hint">${openedText(a)}</div></td>
+      <td><span class="seg-name">${esc(a.customer_id)}</span></td>
+      <td>${esc(a.claim_id)}<div class="hint">${esc(a.claim_type)}</div></td>
+      <td>${esc(a.adjuster_team || "–")}</td><td>${esc(a.city)} ${esc(a.policy_type)}</td>
+      <td class="num">${moneyFull(a.amount)}${a.amount_estimated ? "*" : ""}</td>
+      <td class="num">${a.wait_days} days<div class="hint">limit ${a.limit}, ${a.days_over} over</div></td>
+      <td>${esc(a.status)}</td><td>${esc(a.renewal_status)}</td>
+      <td class="why">${esc(a.action)}</td>
+      <td>${statusSelect(a, watch.data.statuses.retention)}</td></tr>`).join("") || `<tr><td colspan="11" class="hint">No retention calls match these filters.</td></tr>`}</tbody>`;
+  $("#ret-more").hidden = rows.length <= watch.retShown;
+  bindStatusSelects("#ret-table", watch.data.retention);
+}
+function renderRetChart() {
+  const c = watch.data.summary.chart_retention, col = priorityColors();
+  makeChart("retAlerts", $("#chart-ret-alerts"), {
+    type: "bar",
+    data: { labels: c.labels, datasets: PRIORITIES.map((p) => ({ label: p, data: c.series[p], backgroundColor: col[p], stack: "r" })) },
+    options: {
+      indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { position: "bottom", labels: { boxWidth: 12, boxHeight: 12 } } },
+      scales: { x: { stacked: true, ticks: { precision: 0 }, title: { display: true, text: "Clients to call" } }, y: { stacked: true, grid: { display: false } } },
+      onClick: (e, els) => { if (els.length) { $("#f-team").value = c.labels[els[0].index]; watch.retShown = 60; renderRetTable(); } },
+    },
+  });
+}
+
+/* segment alerts (from the quarterly check) and messages */
+function renderSegmentAlerts() {
+  const data = watch.seg, filter = $("#alert-filter").value;
+  const items = sortAlerts(data.alerts.filter((a) => !filter || a.workflow === filter), $("#f-ssort").value, (a) => SEVERITY_RANK[a.severity], "quarter");
   if (!data.alerts.length) {
-    $("#alerts-body").innerHTML = `<div class="empty-state">No alerts yet. They appear here when a check runs: upload a new quarter, add a record by hand, or press “Check and send alerts”.
+    $("#alerts-body").innerHTML = `<div class="empty-state">No segment alerts yet. They appear when a quarterly check runs: upload a new quarter, add a record by hand, or press “Check and send alerts”.
       <div><button class="button primary" type="button" id="go-quarter">Go to New quarter</button></div></div>`;
     $("#go-quarter").addEventListener("click", () => showView("quarter"));
-  } else if (!items.length) {
-    $("#alerts-body").innerHTML = `<div class="empty-state">No alerts marked ${esc(filter)}.</div>`;
-  } else {
-    const rows = items.map((a) => `<tr>
-      <td>${esc(a.quarter_label)}<div class="hint">${esc(a.created_at.replace("T", " ").slice(0, 16))}</div></td>
-      <td><span class="mini-stamp ${a.severity}">${STATUS_LABEL[a.severity]}</span></td>
-      <td><span class="seg-name">${esc(a.segment)}</span><div class="hint">${esc(a.lens_label)}</div>${a.flagged_before && a.flagged_before.length ? `<div class="hint">Also flagged in ${esc(a.flagged_before.join(", "))}</div>` : ""}</td>
-      <td class="what">${esc(a.reasons[0] ? a.reasons[0].text : "")}<div class="hint" style="margin-top:.3rem">Next step: ${esc(a.action)}</div></td>
-      <td>${esc(a.owners.join(", "))}</td>
-      <td><select data-alert="${a.id}" aria-label="Status of ${esc(a.segment)}">${["New", "Acknowledged", "Resolved"].map((w) => `<option ${w === a.workflow ? "selected" : ""}>${w}</option>`).join("")}</select></td>
-      <td>${a.review && a.review.length ? `<a href="/api/alerts/${a.id}/review.csv">${a.review.length} claims (CSV)</a>` : `<span class="hint">–</span>`}</td>
-    </tr>`).join("");
-    $("#alerts-body").innerHTML = `<div class="table-wrap"><table class="ledger alerts-table"><thead><tr>
-      <th>Quarter</th><th>Severity</th><th>Segment</th><th>What the check found</th><th>Sent to</th><th>Status</th><th>Review list</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-    $$("#alerts-body select[data-alert]").forEach((s) => s.addEventListener("change", async () => {
-      try {
-        await postJSON(`/api/alerts/${s.dataset.alert}`, { workflow: s.value });
-        toast(`Marked ${s.value.toLowerCase()}.`);
-        await refreshBadge();
-      } catch (err) { toast(err.message, true); }
-    }));
+    return;
   }
-  $("#outbox-body").innerHTML = data.outbox.length
-    ? data.outbox.map((m) => `<details class="message"><summary><span>${esc(m.sent_at.replace("T", " ").slice(0, 16))}</span><span><strong>${esc(m.to)}</strong></span><span>${esc(m.subject)}</span></summary><pre>${esc(m.body)}</pre><p class="hint">Delivered to: ${esc(m.delivered)}</p></details>`).join("")
+  if (!items.length) { $("#alerts-body").innerHTML = `<div class="empty-state">No segment alerts marked ${esc(filter)}.</div>`; return; }
+  const rows = items.map((a) => `<tr>
+    <td>${esc(a.quarter_label)}<div class="hint">${esc(a.created_at.replace("T", " ").slice(0, 16))}</div></td>
+    <td><span class="mini-stamp ${a.severity}">${STATUS_LABEL[a.severity]}</span></td>
+    <td><span class="seg-name">${esc(a.segment)}</span><div class="hint">${esc(a.lens_label)}</div>${a.flagged_before && a.flagged_before.length ? `<div class="hint">Also flagged in ${esc(a.flagged_before.join(", "))}</div>` : ""}</td>
+    <td class="what">${esc(a.reasons[0] ? a.reasons[0].text : "")}<div class="hint" style="margin-top:.3rem">Next step: ${esc(a.action)}</div></td>
+    <td>${esc(a.owners.join(", "))}</td>
+    <td><select data-alert="${a.id}" aria-label="Status of ${esc(a.segment)}">${["New", "Acknowledged", "Resolved"].map((w) => `<option ${w === a.workflow ? "selected" : ""}>${w}</option>`).join("")}</select></td>
+    <td>${a.review && a.review.length ? `<a href="/api/alerts/${a.id}/review.csv">${a.review.length} claims (CSV)</a>` : `<span class="hint">–</span>`}</td></tr>`).join("");
+  $("#alerts-body").innerHTML = `<div class="table-wrap"><table class="ledger alerts-table watch-table"><thead><tr>
+    <th>Quarter</th><th>Severity</th><th>Segment</th><th>What the check found</th><th>Sent to</th><th>Status</th><th>Review list</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  $$("#alerts-body select[data-alert]").forEach((sel) => sel.addEventListener("change", async () => {
+    try {
+      await postJSON(`/api/alerts/${sel.dataset.alert}`, { workflow: sel.value });
+      const a = data.alerts.find((x) => x.id === sel.dataset.alert);
+      if (a) a.workflow = sel.value;
+      $("#sub-count-segments").textContent = data.alerts.filter((x) => x.workflow === "New").length || "";
+      toast(`Marked ${sel.value.toLowerCase()}.`);
+      refreshBadge();
+    } catch (err) { toast(err.message, true); }
+  }));
+}
+function renderOutbox() {
+  const box = watch.seg.outbox;
+  $("#outbox-body").innerHTML = box.length
+    ? box.map((m) => `<details class="message"><summary><span>${esc(m.sent_at.replace("T", " ").slice(0, 16))}</span><span><strong>${esc(m.to)}</strong></span><span>${esc(m.subject)}</span></summary><pre>${esc(m.body)}</pre><p class="hint">Delivered to: ${esc(m.delivered)}</p></details>`).join("")
     : `<p class="empty-state">No messages yet.</p>`;
 }
+
+/* alert rules */
+function renderRules() {
+  const st = watch.data.settings;
+  for (const k of RULE_KEYS) { const el = $("#w-" + k); if (el) el.value = k === "watchlist" ? st.watchlist.join(", ") : st[k]; }
+}
+async function applyRules(settings) {
+  const w = await postJSON("/api/watch/settings", { settings });
+  watch.data = w; watch.claimShown = 60; watch.retShown = 60;
+  renderAlertCenter();
+  refreshBadge();
+  toast(`Rules applied: ${int(w.claims.length)} claim alerts, ${int(w.retention.length)} clients to call.`);
+}
 function bindAlerts() {
-  $("#alert-filter").addEventListener("change", loadAlerts);
+  $$(".subtabs button").forEach((b) => b.addEventListener("click", () => showSub(b.dataset.sub)));
+  for (const id of ["#f-level", "#f-source", "#f-cstatus"]) $(id).addEventListener("change", () => { watch.claimShown = 60; renderClaimTiles(); renderClaimTable(); });
+  $("#f-csearch").addEventListener("input", () => { watch.claimShown = 60; renderClaimTable(); });
+  for (const id of ["#f-priority", "#f-team", "#f-rstatus"]) $(id).addEventListener("change", () => { watch.retShown = 60; renderRetTiles(); renderRetTable(); });
+  $("#f-rsearch").addEventListener("input", () => { watch.retShown = 60; renderRetTable(); });
+  $("#claim-more").addEventListener("click", () => { watch.claimShown += 60; renderClaimTable(); });
+  $("#ret-more").addEventListener("click", () => { watch.retShown += 60; renderRetTable(); });
+  $("#claim-csv").addEventListener("click", () => downloadCSV(filteredClaims().map(flatAlert), `claim-alerts_${today()}.csv`));
+  $("#ret-csv").addEventListener("click", () => downloadCSV(filteredRet().map(flatAlert), `retention-calls_${today()}.csv`));
+  $("#alert-filter").addEventListener("change", renderSegmentAlerts);
+  $("#f-ssort").addEventListener("change", renderSegmentAlerts);
+  $("#f-csort").addEventListener("change", () => { watch.claimShown = 60; renderClaimTable(); });
+  $("#f-rsort").addEventListener("change", () => { watch.retShown = 60; renderRetTable(); });
+  $("#rules-apply").addEventListener("click", () => {
+    const st = {};
+    for (const k of RULE_KEYS) { const v = $("#w-" + k).value; st[k] = k === "watchlist" ? v : Number(v); }
+    runBusy($("#rules-apply"), "Applying…", () => applyRules(st));
+  });
+  $("#rules-reset").addEventListener("click", () => runBusy($("#rules-reset"), "Resetting…", () => applyRules(watch.data.defaults)));
 }
 
 /* ----------------------------------------------------------------- notes */
@@ -929,9 +1193,40 @@ function bindNotes() {
   });
 }
 
+/* ------------------------------------------------------------------ boot */
+function bootStart() {
+  const el = $("#boot");
+  if (!el) return null;
+  let seen = false;
+  try { seen = sessionStorage.getItem("mm-booted") === "1"; sessionStorage.setItem("mm-booted", "1"); } catch (e) { /* ignore */ }
+  if (seen || matchMedia("(prefers-reduced-motion: reduce)").matches) { el.remove(); return null; }
+  const pre = $("#boot-text", el);
+  pre.textContent = "MILLENNIUM MUTUAL :: MONEY LEDGER v2.000\nBIOS DATE 01/01/2000  ".padEnd(41) + "\nY2K COMPLIANCE CHECK ".padEnd(40, ".") + " OK\n";
+  const close = () => { el.classList.add("done"); setTimeout(() => el.remove(), 400); };
+  el.addEventListener("click", close);
+  document.addEventListener("keydown", close, { once: true });
+  return { pre, close };
+}
+async function bootFinish(b, meta) {
+  if (!b) return;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const line = (label, value) => `${(label + " ").padEnd(39, ".")} ${value}`;
+  const rows = [
+    line("LOADING POLICIES", int(meta.counts.policies)),
+    line("LOADING CLAIMS", int(meta.counts.claims)),
+    line("REPAIRING RAW DATA", `${meta.log_fixes} FIXES`),
+    line("DATA CURRENT TO", dateLabel(meta.asof).toUpperCase()),
+    line("ARMING ALERTS", `${int(meta.watch.claims)} CLAIMS / ${int(meta.watch.retention)} CLIENTS`),
+    "", "READY_",
+  ];
+  for (const r of rows) { await wait(150); b.pre.textContent += r + "\n"; }
+  await wait(500);
+  b.close();
+}
+
 /* ------------------------------------------------------------------ init */
 async function init() {
-  initTheme();
+  const boot = bootStart();
   applyChartDefaults();
   bindTabs();
   bindLedger();
@@ -940,8 +1235,10 @@ async function init() {
   bindNotes();
   try {
     await loadMeta();
+    bootFinish(boot, state.meta);
     await loadLedger();
   } catch (err) {
+    if (boot) boot.close();
     toast("Can't reach the server. Is `python run.py` running? " + err.message, true);
   }
   const v = location.hash.replace("#", "");

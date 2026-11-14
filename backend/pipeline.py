@@ -349,9 +349,10 @@ def clean_claims(raw: pd.DataFrame, log: CleaningLog, policy_ids: set, max_date:
 
 def enrich_claims(claims: pd.DataFrame, policies: pd.DataFrame) -> pd.DataFrame:
     """Join policy attributes and compute paid, open-claim reserve and incurred cost."""
-    attrs = ["policy_id", "city", "policy_type", "risk_band", "channel", "broker_code", "source", "deductible",
-             "age_band", "renewal_status", "start", "end", "premium"]
+    attrs = ["policy_id", "customer_id", "city", "policy_type", "risk_band", "channel", "broker_code", "source",
+             "deductible", "age_band", "renewal_status", "start", "end", "premium"]
     df = claims.merge(policies[attrs], on="policy_id", how="inner")
+    df["customer_id"] = df["customer_id"].fillna("NO-ID-" + df["policy_id"].astype(str))
 
     is_open = df["status"].isin(["Open", "Under Review"])
     denied = df["status"] == "Denied"
@@ -371,6 +372,11 @@ def enrich_claims(claims: pd.DataFrame, policies: pd.DataFrame) -> pd.DataFrame:
     df["days_to_settle"] = settle.where((settle >= 0) & (lag >= 0))
     df["near_threshold"] = (df["claim_amount"] >= 9_000) & (df["claim_amount"] < SENIOR_REVIEW_THRESHOLD)
     df["is_open"] = is_open
+    # Claim number per customer (all of a customer's policies together, in loss-date order): 1st, 2nd, 3rd+
+    df = df.sort_values(["customer_id", "loss_date", "reported_date", "claim_id"]).reset_index(drop=True)
+    df["claim_seq"] = df.groupby("customer_id").cumcount() + 1
+    df["customer_claims"] = df.groupby("customer_id")["claim_id"].transform("count")
+    df["claim_number"] = np.where(df["claim_seq"] == 1, "1st", np.where(df["claim_seq"] == 2, "2nd", "3rd+"))
     return df
 
 

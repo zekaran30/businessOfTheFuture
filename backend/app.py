@@ -85,7 +85,9 @@ def meta():
         "assumptions": DEFAULT_ASSUMPTIONS, "rules": D.DEFAULT_RULES,
         "counts": {"policies": len(store.policies), "claims": len(store.claims)},
         "batches": [{k: b.get(k) for k in ("id", "name", "uploaded_at", "as_of", "quarter")} for b in store.batches],
-        "alerts_new": sum(1 for a in store.alerts if a.get("workflow") == "New"),
+        "alerts_new": sum(1 for a in store.alerts if a.get("workflow") == "New") + store.watch_brief()["critical_new"],
+        "watch": store.watch_brief(),
+        "log_fixes": len(store.base_log),
         "sample_available": (SAMPLE / "policies_2026Q4.csv").exists(),
     })
 
@@ -101,7 +103,7 @@ def ledger(body: dict = Body(default={})):
         heat_rows, heat_cols = "city", "policy_type"
     with store.lock:
         result = M.ledger(store.policies, store.claims, filters, _assumptions(body), store.asof, store.data_start,
-                          dim, heat_rows, heat_cols, D.DEFAULT_RULES["min_earned"])
+                          dim, heat_rows, heat_cols, D.DEFAULT_RULES["min_earned"], body.get("cn_dim") or "source")
     return ok(result)
 
 
@@ -147,8 +149,9 @@ def _ingest(name: str, policies_raw, claims_raw, as_of: str | None, body: dict) 
     quarter = body.get("quarter") or batch["quarter"]
     result = _run_check(quarter, body)
     actions = store.log_check(result, trigger=f"New data: {name}")
+    watch = store.run_watch(f"New data: {name}")
     return {"batch": {k: batch.get(k) for k in ("id", "name", "uploaded_at", "as_of", "quarter", "report")},
-            "check": result, "actions": actions}
+            "check": result, "actions": actions, "watch": watch}
 
 
 @app.post("/api/upload")
@@ -190,6 +193,7 @@ def manual(body: dict = Body(...)):
         check = _run_check(result["quarter"], body)
         payload["check"] = check
         payload["actions"] = store.log_check(check, trigger=f"Hand-entered {kind} {result['id']}")
+        payload["watch"] = store.run_watch(f"Hand-entered {kind} {result['id']}")
     return ok(payload)
 
 
@@ -250,3 +254,26 @@ def export_claims(segment_lens: str = "", quarter: str = ""):
     store.claims[cols].to_csv(buf, index=False)
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": 'attachment; filename="claims_clean.csv"'})
+
+
+# ------------------------------------------------ claim and retention alerts
+@app.get("/api/watch")
+def watch():
+    """Claim alerts (4 levels) and retention calls, with their summary and the rules in force."""
+    return ok(store.watch_payload())
+
+
+@app.post("/api/watch/status")
+def watch_status(body: dict = Body(...)):
+    if not store.set_watch_status(str(body.get("key", "")), str(body.get("status", ""))):
+        raise HTTPException(400, "Unknown alert or status.")
+    return ok({"saved": True})
+
+
+@app.post("/api/watch/settings")
+def watch_settings(body: dict = Body(...)):
+    """Change the alert rules (thresholds, watched brokers). Re-evaluates every claim; sends no messages."""
+    try:
+        return ok(store.set_watch_settings(body.get("settings") or {}))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Invalid alert rules: {exc}")

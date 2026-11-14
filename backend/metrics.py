@@ -22,7 +22,7 @@ import pandas as pd
 DAY = np.timedelta64(1, "D")
 
 POLICY_FILTERS = ["city", "policy_type", "risk_band", "channel", "source", "deductible", "age_band", "renewal_status"]
-CLAIM_FILTERS = ["claim_type", "adjuster_team", "status"]
+CLAIM_FILTERS = ["claim_type", "adjuster_team", "status", "claim_number"]
 
 DIMENSIONS = {
     "city": ("City", ["city"], "policy"),
@@ -38,6 +38,7 @@ DIMENSIONS = {
     "renewal_status": ("Renewal status", ["renewal_status"], "policy"),
     "claim_type": ("Claim type", ["claim_type"], "claim"),
     "adjuster_team": ("Adjuster team", ["adjuster_team"], "claim"),
+    "claim_number": ("Claim number (1st, 2nd, 3rd+)", ["claim_number"], "claim"),
 }
 
 ORDER = {
@@ -45,6 +46,7 @@ ORDER = {
     "age_band": ["Under 25", "25–34", "35–49", "50–64", "65+", "Unknown"],
     "renewal_status": ["Renewed", "Not Renewed", "In Force", "Cancelled", "Unknown"],
     "status": ["Paid", "Denied", "Open", "Under Review"],
+    "claim_number": ["1st", "2nd", "3rd+"],
 }
 
 
@@ -254,6 +256,7 @@ def breakdown(pol, clm, dim, a, b, assumptions, total_earned) -> dict:
         g = C.groupby(keys).agg(claims=("claim_id", "count"), paid=("paid", "sum"), reserve=("reserve", "sum"),
                                 incurred=("incurred", "sum"), settle_days=("days_to_settle", "median"))
         tot = g["incurred"].sum()
+        g["avg_claim"] = g["incurred"] / g["claims"].replace(0, np.nan)
         g["incurred_share"] = g["incurred"] / tot if tot else np.nan
         g["loss_ratio_points"] = g["incurred"] / total_earned if total_earned else np.nan
         rows = table_records(g, keys)
@@ -318,7 +321,36 @@ def histogram(clm_window: pd.DataFrame, book_window: pd.DataFrame) -> dict:
     }
 
 
-def ledger(policies, claims, filters, assumptions, asof, data_start, dim, heat_rows, heat_cols, min_earned) -> dict:
+def claim_number_view(clm_w: pd.DataFrame, dim: str) -> dict:
+    """What 1st, 2nd and 3rd+ claims cost, for each value of a policy dimension (default: broker or direct)."""
+    if dim not in DIMENSIONS or DIMENSIONS[dim][2] != "policy":
+        dim = "source"
+    label, keys, _ = DIMENSIONS[dim]
+    buckets = ORDER["claim_number"]
+
+    def empty():
+        return {b: {"claims": 0, "incurred": 0.0, "paid": 0.0, "avg": None} for b in buckets}
+    rows: dict = {}
+    if len(clm_w):
+        g = clm_w.groupby(keys + ["claim_number"]).agg(claims=("claim_id", "count"), incurred=("incurred", "sum"),
+                                                        paid=("paid", "sum"))
+        for idx, rec in g.iterrows():
+            *kv, b = idx
+            lab = label_of(keys, tuple(kv))
+            row = rows.setdefault(lab, {"label": lab, "key": dict(zip(keys, kv)), "buckets": empty()})
+            row["buckets"][b] = {"claims": int(rec["claims"]), "incurred": float(rec["incurred"]), "paid": float(rec["paid"]),
+                                 "avg": float(rec["incurred"] / rec["claims"]) if rec["claims"] else None}
+    out_rows = sorted(rows.values(), key=lambda r: -sum(v["incurred"] for v in r["buckets"].values()))
+    overall = empty()
+    if len(clm_w):
+        for b, grp in clm_w.groupby("claim_number"):
+            overall[b] = {"claims": int(len(grp)), "incurred": float(grp["incurred"].sum()), "paid": float(grp["paid"].sum()),
+                          "avg": float(grp["incurred"].mean())}
+    return {"dim": dim, "label": label, "rows": out_rows, "overall": overall}
+
+
+def ledger(policies, claims, filters, assumptions, asof, data_start, dim, heat_rows, heat_cols, min_earned,
+           cn_dim="source") -> dict:
     a, b = window(filters.get("period_from"), filters.get("period_to"), data_start, asof)
     pol, clm = apply_filters(policies, claims, filters)
     totals = total_row(pol, clm, a, b, assumptions)
@@ -338,6 +370,7 @@ def ledger(policies, claims, filters, assumptions, asof, data_start, dim, heat_r
         "breakdown": breakdown(pol, clm, dim, a, b, assumptions, earned_total),
         "heatmap": heatmap(pol, clm, heat_rows, heat_cols, a, b, assumptions, min_earned),
         "histogram": histogram(clm_w, book_w),
+        "claim_numbers": claim_number_view(clm_w, cn_dim),
         "breakeven_loss_ratio": 1 - assumptions["expense_ratio"]
         - assumptions["broker_commission"] * ((totals.get("earned_broker") or 0) / earned_total if earned_total else 0),
     }

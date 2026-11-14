@@ -11,11 +11,14 @@ import shutil
 import threading
 import urllib.request
 import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
+from . import alerts as A
 from . import metrics as M
 from . import pipeline as P
 
@@ -43,6 +46,12 @@ class Store:
         self.alerts = self._load_json("alerts.json")
         self.outbox = self._load_json("outbox.json")
         self.rebuild()
+        self.watch_settings = A.normalise(self._load_json_obj("watch_settings.json"))
+        self.watch_status = self._load_json_obj("watch_status.json")
+        seen = self._load_json("watch_seen.json")  # alert key -> when it was first opened
+        self.watch_seen = seen if isinstance(seen, dict) else {k: now_iso() for k in seen}
+        self.watch_cache = None
+        self.run_watch("First scan of the data")
 
     # ------------------------------------------------------------ persistence
     def _load_json(self, name):
@@ -53,6 +62,10 @@ class Store:
             except json.JSONDecodeError:
                 return []
         return []
+
+    def _load_json_obj(self, name):
+        obj = self._load_json(name)
+        return obj if isinstance(obj, dict) else {}
 
     def _save_json(self, name, obj):
         (RUNTIME / name).write_text(json.dumps(obj, indent=2, default=str))
@@ -122,6 +135,10 @@ class Store:
 
             asofs = [pd.Timestamp(b["as_of"]) for b in self.batches if b.get("as_of")]
             self.asof = max([P.EXTRACTION_DATE] + asofs)
+            closed = clm["closed_date"].notna()  # days a client waited for a decision (so far, if still open)
+            wait = np.where(closed, (clm["closed_date"] - clm["reported_date"]).dt.days,
+                            (self.asof - clm["reported_date"]).dt.days)
+            clm["wait_days"] = pd.Series(wait, index=clm.index, dtype=float).where(lambda w: w >= 0)
             self.data_start = pol["start"].min().normalize()
             self.policies, self.claims = pol, clm
             self.base_log = base_log.entries
@@ -208,7 +225,11 @@ class Store:
             self.batches, self.alerts, self.outbox = [], [], []
             self._save_json("alerts.json", [])
             self._save_json("outbox.json", [])
+            self.watch_settings, self.watch_status, self.watch_seen = A.normalise({}), {}, {}
+            for name, obj in (("watch_settings.json", {}), ("watch_status.json", {}), ("watch_seen.json", {})):
+                self._save_json(name, obj)
             self.rebuild()
+            self.run_watch("First scan after reset")
 
     # --------------------------------------------------------------- actions
     def log_check(self, result: dict, trigger: str) -> dict:
@@ -286,3 +307,107 @@ class Store:
                     self._save_json("alerts.json", self.alerts)
                     return a
         return None
+
+    # ------------------------------------------------------- claim + retention alerts
+    def run_watch(self, trigger: str, notify: bool = True) -> dict:
+        """Re-evaluate every claim against the alert rules; message owners about alerts not seen before."""
+        with self.lock:
+            s = A.normalise(self.watch_settings)
+            claims, retention = A.claim_alerts(self.claims, s), A.retention_alerts(self.claims, s)
+            seen = dict(self.watch_seen)
+            first = not seen
+            stamp = now_iso()
+            new_c = [a for a in claims if a["key"] not in seen]
+            new_r = [a for a in retention if a["key"] not in seen]
+            messages = self._notify_watch(trigger, new_c, new_r, first) if notify and (new_c or new_r) else []
+            for a in claims + retention:
+                a["opened_at"] = seen.get(a["key"], stamp)
+            seen.update({a["key"]: stamp for a in new_c + new_r})
+            self.watch_seen = seen
+            self._save_json("watch_seen.json", self.watch_seen)
+            self.watch_cache = {"settings": s, "claims": claims, "retention": retention,
+                                "summary": A.summarise(claims, retention), "ran_at": now_iso(), "trigger": trigger,
+                                "new_keys": sorted({a["key"] for a in new_c + new_r})}
+            return {"claim_new": len(new_c), "retention_new": len(new_r),
+                    "claim_new_by_level": {str(l): sum(1 for a in new_c if a["level"] == l) for l in (1, 2, 3, 4)},
+                    "retention_new_by_priority": {p: sum(1 for a in new_r if a["priority"] == p) for p in A.PRIORITIES},
+                    "messages": messages}
+
+    def _deliver(self, msg: dict) -> dict:
+        url = os.environ.get("ALERT_WEBHOOK_URL")
+        if url:
+            try:
+                req = urllib.request.Request(url, data=json.dumps({"text": f"*{msg['subject']}* (to {msg['to']})\n{msg['body']}"}).encode(),
+                                             headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=5)
+                msg["delivered"] = "outbox + webhook"
+            except Exception as exc:
+                msg["delivered"] = f"outbox (webhook failed: {exc.__class__.__name__})"
+        self.outbox.insert(0, msg)
+        return msg
+
+    def _notify_watch(self, trigger, new_c, new_r, first) -> list:
+        prefix = "First scan: " if first else ""
+        out = []
+
+        def message(to, subject, lines):
+            return self._deliver({"id": uuid.uuid4().hex[:10], "sent_at": now_iso(), "to": to, "subject": subject,
+                                  "body": "\n".join(lines).strip(), "trigger": trigger, "delivered": "outbox"})
+        if new_c:
+            counts = Counter(a["level"] for a in new_c)
+            lines = [f"{len(new_c)} claim(s) need a look ({trigger}).",
+                     ", ".join(f"Level {l} {A.LEVEL_LABEL[l]}: {counts[l]}" for l in (1, 2, 3, 4) if counts[l]), ""]
+            for a in new_c[:12]:
+                lines.append(f"[Level {a['level']}] {a['claim_id']} {a['source']} {a['city']} {a['policy_type']}, "
+                             f"{a['claim_type']} {A.money(a['claim_amount'])}: {'; '.join(a['reasons'])}")
+            if len(new_c) > 12:
+                lines.append(f"... and {len(new_c) - 12} more in Alerts > Claim alerts.")
+            out.append(message("VP of Claims", f"{prefix}{len(new_c)} new claim alert{'s' if len(new_c) != 1 else ''}"
+                               + (f", {counts[1]} critical" if counts[1] else ""), lines))
+        if new_r:
+            counts = Counter(a["priority"] for a in new_r)
+            lines = [A.CALL, "", ", ".join(f"{p}: {counts[p]}" for p in A.PRIORITIES if counts[p]), ""]
+            for a in new_r[:12]:
+                lines.append(f"[{a['priority']}] Customer {a['customer_id']} ({a['claim_id']}, {a['city']} {a['policy_type']}, "
+                             f"{a['claim_type']} {A.money(a['amount'])}): {a['wait_days']} days, limit {a['limit']}")
+            if len(new_r) > 12:
+                lines.append(f"... and {len(new_r) - 12} more in Alerts > Retention calls.")
+            out.append(message("Head of Customer Retention",
+                               f"{prefix}{len(new_r)} client{'s' if len(new_r) != 1 else ''} to call", lines))
+        crit = sum(1 for a in new_c if a["level"] == 1)
+        out.append(message("CFO", f"{prefix}{len(new_c)} claim alerts, {len(new_r)} clients to call",
+                           [f"New claim alerts: {len(new_c)} ({crit} from watched brokers), "
+                            f"{A.money(sum(a['claim_amount'] or 0 for a in new_c))} claimed.",
+                            f"New retention calls: {len(new_r)}.", f"Trigger: {trigger}."]))
+        self._save_json("outbox.json", self.outbox)
+        return out
+
+    def watch_payload(self) -> dict:
+        with self.lock:
+            w = self.watch_cache
+            for a in w["claims"]:
+                a["workflow"] = self.watch_status.get(a["key"], "New")
+            for a in w["retention"]:
+                a["workflow"] = self.watch_status.get(a["key"], "To call")
+            return {**w, "statuses": {"claims": A.CLAIM_STATUSES, "retention": A.RETENTION_STATUSES}, "defaults": A.DEFAULT_WATCH}
+
+    def set_watch_status(self, key: str, status: str) -> bool:
+        allowed = A.CLAIM_STATUSES if key.startswith("claim:") else A.RETENTION_STATUSES
+        if status not in allowed:
+            return False
+        with self.lock:
+            self.watch_status[key] = status
+            self._save_json("watch_status.json", self.watch_status)
+        return True
+
+    def set_watch_settings(self, settings: dict) -> dict:
+        with self.lock:
+            self.watch_settings = A.normalise({**self.watch_settings, **settings})
+            self._save_json("watch_settings.json", self.watch_settings)
+            self.run_watch("Alert rules changed", notify=False)
+            return self.watch_payload()
+
+    def watch_brief(self) -> dict:
+        w = self.watch_cache or {"claims": [], "retention": []}
+        crit_new = sum(1 for a in w["claims"] if a["level"] == 1 and self.watch_status.get(a["key"], "New") == "New")
+        return {"claims": len(w["claims"]), "retention": len(w["retention"]), "critical_new": crit_new}

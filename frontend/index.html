@@ -4,14 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Millennium Mutual: money ledger</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📒</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💾</text></svg>">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <div class="boot" id="boot" aria-hidden="true"><pre id="boot-text"></pre><span class="skip">click to skip</span></div>
+
   <header class="masthead">
     <div class="brand">
       <span class="brand-name">Millennium Mutual</span>
-      <span class="brand-tool">Money ledger</span>
+      <span class="brand-tool">money_ledger</span>
+      <span class="y2k" title="Founded in 2000, and the dates still work">Y2K OK</span>
     </div>
     <nav class="tabs" role="tablist" aria-label="Views">
       <button role="tab" data-view="ledger" aria-selected="true">Ledger</button>
@@ -19,10 +22,7 @@
       <button role="tab" data-view="alerts" aria-selected="false">Alerts<span class="badge" id="alert-count"></span></button>
       <button role="tab" data-view="notes" aria-selected="false">Data notes</button>
     </nav>
-    <div class="asof">Data to <strong id="asof">…</strong></div>
-    <button class="icon-button" id="theme-toggle" type="button" aria-label="Switch between light and dark" title="Light or dark">
-      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg>
-    </button>
+    <div class="asof">data to <strong id="asof">…</strong></div>
   </header>
 
   <!-- ============================================================ LEDGER -->
@@ -44,7 +44,7 @@
           <summary>Cost assumptions</summary>
           <div class="assumption"><label for="a-expense">Operating costs, % of premium</label><input id="a-expense" type="number" min="0" max="60" step="1"></div>
           <div class="assumption"><label for="a-commission">Broker commission, % of premium</label><input id="a-commission" type="number" min="0" max="40" step="0.5"></div>
-          <p class="hint" style="margin-top:.5rem">Not in the data. Set these to Millennium Mutual's actual rates; every result updates.</p>
+          <p class="hint" style="margin-top:.5rem">Not in the data. Set these to Millennium Mutual’s actual rates; every result updates.</p>
         </details>
       </aside>
 
@@ -78,11 +78,25 @@
           <div class="table-wrap"><table class="ledger" id="pl-table"></table></div>
         </section>
 
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Does a 2nd or 3rd claim cost more?</h2>
+            <div class="cn-controls">
+              <label>Group by <select id="cn-dim" aria-label="Group claim numbers by"></select></label>
+              <div class="seg-toggle" role="group" aria-label="Measure">
+                <button type="button" data-cn="avg" aria-pressed="true">Average claim</button>
+                <button type="button" data-cn="total" aria-pressed="false">Total cost</button>
+                <button type="button" data-cn="count" aria-pressed="false">Number of claims</button>
+              </div>
+            </div>
+          </div>
+          <div class="chart-box"><canvas id="chart-cn" aria-label="Claims by claim number"></canvas></div>
+          <p class="panel-note" id="cn-note"></p>
+        </section>
+
         <div class="two-up">
           <section class="panel">
-            <div class="panel-head">
-              <h2 id="heat-title">Loss ratio by city and product</h2>
-            </div>
+            <div class="panel-head"><h2 id="heat-title">Loss ratio by city and product</h2></div>
             <div class="heat-controls">
               <label>Rows <select id="heat-rows"></select></label>
               <label>Columns <select id="heat-cols"></select></label>
@@ -90,9 +104,7 @@
             <div class="table-wrap" id="heatmap"></div>
           </section>
           <section class="panel">
-            <div class="panel-head">
-              <h2>Claim sizes around the $10,000 review line</h2>
-            </div>
+            <div class="panel-head"><h2>Claim sizes around the $10,000 review line</h2></div>
             <div class="chart-box short"><canvas id="chart-hist" aria-label="Claim size distribution"></canvas></div>
             <p class="panel-note" id="hist-note"></p>
           </section>
@@ -106,8 +118,8 @@
     <div class="page">
       <div class="page-intro">
         <h1>Add a new quarter</h1>
-        <p>Drop in the latest extract from the policy and claims systems. It's cleaned with the same rules as the original data,
-          added to the ledger, and every part of the business is checked for losses. Alerts go out on their own.</p>
+        <p>Drop in the latest extract from the policy and claims systems. It’s cleaned with the same rules as the original data,
+          added to the ledger, and every segment and every claim is checked. Alerts go out on their own.</p>
       </div>
 
       <div class="q-grid">
@@ -140,47 +152,45 @@
             to try the upload yourself.</p>
         </form>
 
-        <div>
-          <div class="side-box">
-            <h2>Add one record by hand</h2>
-            <p>For a late policy or a single claim. The check re-runs for its quarter.</p>
-            <div class="seg-toggle" role="group" aria-label="Record type">
-              <button type="button" data-kind="policy" aria-pressed="true">Policy</button>
-              <button type="button" data-kind="claim" aria-pressed="false">Claim</button>
-            </div>
-            <form id="manual-policy" class="form-grid">
-              <label>City<select name="city" required></select></label>
-              <label>Product<select name="policy_type"><option>Auto</option><option>Home</option></select></label>
-              <label>Risk band<select name="risk_band"><option>Low</option><option>Medium</option><option>High</option></select></label>
-              <label>Channel<select name="channel"><option>Agent</option><option>Broker</option><option>Online</option></select></label>
-              <label>Broker code<input type="text" name="broker_code" placeholder="e.g. B11" disabled></label>
-              <label>Start date<input type="date" name="start_date" required></label>
-              <label>Annual premium ($)<input type="number" name="annual_premium" min="1" step="0.01" required></label>
-              <label>Deductible<select name="deductible"><option>500</option><option selected>1000</option><option>2500</option></select></label>
-              <label>Customer age<input type="number" name="customer_age" min="16" max="100"></label>
-              <label>Policy ID<input type="text" name="policy_id" placeholder="Leave blank to create one"></label>
-              <div class="wide"><button class="button primary" type="submit">Add policy</button></div>
-            </form>
-            <form id="manual-claim" class="form-grid" hidden>
-              <label class="wide">Policy ID<input type="text" name="policy_id" placeholder="e.g. POL-04210" required></label>
-              <label>Loss date<input type="date" name="loss_date" required></label>
-              <label>Reported date<input type="date" name="reported_date" required></label>
-              <label>Claim type<select name="claim_type"></select></label>
-              <label>Claim amount ($)<input type="number" name="claim_amount" min="0" step="0.01" required></label>
-              <label>Status<select name="status"><option>Open</option><option>Paid</option><option>Denied</option><option>Under Review</option></select></label>
-              <label>Adjuster team<select name="adjuster_team"><option>Team A</option><option>Team B</option><option>Team C</option></select></label>
-              <label>Paid amount ($)<input type="number" name="paid_amount" min="0" step="0.01"></label>
-              <label>Closed date<input type="date" name="closed_date"></label>
-              <div class="wide"><button class="button primary" type="submit">Add claim</button></div>
-            </form>
+        <div class="side-box">
+          <h2>Add one record by hand</h2>
+          <p>For a late policy or a single claim. Every check re-runs.</p>
+          <div class="seg-toggle" role="group" aria-label="Record type">
+            <button type="button" data-kind="policy" aria-pressed="true">Policy</button>
+            <button type="button" data-kind="claim" aria-pressed="false">Claim</button>
           </div>
+          <form id="manual-policy" class="form-grid">
+            <label>City<select name="city" required></select></label>
+            <label>Product<select name="policy_type"><option>Auto</option><option>Home</option></select></label>
+            <label>Risk band<select name="risk_band"><option>Low</option><option>Medium</option><option>High</option></select></label>
+            <label>Channel<select name="channel"><option>Agent</option><option>Broker</option><option>Online</option></select></label>
+            <label>Broker code<input type="text" name="broker_code" placeholder="e.g. B11" disabled></label>
+            <label>Start date<input type="date" name="start_date" required></label>
+            <label>Annual premium ($)<input type="number" name="annual_premium" min="1" step="0.01" required></label>
+            <label>Deductible<select name="deductible"><option>500</option><option selected>1000</option><option>2500</option></select></label>
+            <label>Customer ID<input type="text" name="customer_id" placeholder="Optional, e.g. CU10483"></label>
+            <label>Customer age<input type="number" name="customer_age" min="16" max="100"></label>
+            <label class="wide">Policy ID<input type="text" name="policy_id" placeholder="Leave blank to create one"></label>
+            <div class="wide"><button class="button primary" type="submit">Add policy</button></div>
+          </form>
+          <form id="manual-claim" class="form-grid" hidden>
+            <label class="wide">Policy ID<input type="text" name="policy_id" placeholder="e.g. POL-04210" required></label>
+            <label>Loss date<input type="date" name="loss_date" required></label>
+            <label>Reported date<input type="date" name="reported_date" required></label>
+            <label>Claim type<select name="claim_type"></select></label>
+            <label>Claim amount ($)<input type="number" name="claim_amount" min="0" step="0.01" required></label>
+            <label>Status<select name="status"><option>Open</option><option>Paid</option><option>Denied</option><option>Under Review</option></select></label>
+            <label>Adjuster team<select name="adjuster_team"><option>Team A</option><option>Team B</option><option>Team C</option></select></label>
+            <label>Paid amount ($)<input type="number" name="paid_amount" min="0" step="0.01"></label>
+            <label>Closed date<input type="date" name="closed_date"></label>
+            <div class="wide"><button class="button primary" type="submit">Add claim</button></div>
+          </form>
         </div>
       </div>
 
       <details class="more" id="check-settings">
-        <summary>Check any quarter, or try different alert lines</summary>
-        <p class="hint" style="margin-top:.4rem">Preview shows what would be flagged without sending anything.
-          Lower the lines to see more flags, raise them to see only the biggest problems.</p>
+        <summary>Check any quarter, or try different segment alert lines</summary>
+        <p class="hint" style="margin-top:.4rem">Preview shows what would be flagged without sending anything.</p>
         <div class="rules-grid">
           <label>Quarter<select id="check-quarter"></select></label>
           <label>Money at stake, at least ($)<input type="number" id="r-materiality" min="0" step="1000"></label>
@@ -205,19 +215,97 @@
   <section class="view" id="view-alerts" role="tabpanel" aria-label="Alerts">
     <div class="page">
       <div class="page-intro">
-        <h1>Alerts</h1>
-        <p>Every flag the check raised, who it went to, and where it stands. Repeat checks update an alert rather than duplicating it.</p>
+        <h1>Alert center</h1>
+        <p>Every rule runs on its own whenever new data arrives, and each owner gets a message about anything new. Work each list from the top.</p>
+        <p class="watch-ran" id="watch-ran"></p>
       </div>
-      <div class="toolbar">
-        <label class="hint" for="alert-filter">Show</label>
-        <select id="alert-filter"><option value="">All alerts</option><option>New</option><option>Acknowledged</option><option>Resolved</option></select>
+      <div class="subtabs" role="tablist" aria-label="Alert lists">
+        <button role="tab" data-sub="claims" aria-selected="true">Claim alerts<span class="badge" id="sub-count-claims"></span></button>
+        <button role="tab" data-sub="retention" aria-selected="false">Retention calls<span class="badge" id="sub-count-retention"></span></button>
+        <button role="tab" data-sub="segments" aria-selected="false">Money-losing segments<span class="badge" id="sub-count-segments"></span></button>
+        <button role="tab" data-sub="messages" aria-selected="false">Messages sent</button>
       </div>
-      <div id="alerts-body"></div>
-      <section class="outbox">
-        <h2>Messages sent</h2>
-        <p class="hint" style="margin-top:.3rem">One message per person per check, only for new alerts. Set ALERT_WEBHOOK_URL to also post them to a team chat.</p>
+
+      <div class="subpane" id="sub-claims">
+        <div class="tiles" id="claim-tiles"></div>
+        <section class="panel">
+          <div class="panel-head"><h2>Claim alerts by broker or channel</h2><p class="hint">Click a bar to list that broker’s alerts.</p></div>
+          <div class="chart-box short"><canvas id="chart-claim-alerts"></canvas></div>
+        </section>
+        <div class="toolbar">
+          <select id="f-level" aria-label="Level"><option value="">All levels</option><option value="1">Level 1: Critical</option><option value="2">Level 2: High</option><option value="3">Level 3: Medium</option><option value="4">Level 4: Low</option></select>
+          <select id="f-source" aria-label="Broker or channel"><option value="">All brokers and channels</option></select>
+          <select id="f-cstatus" aria-label="Status"><option value="">Any status</option></select>
+          <input type="search" id="f-csearch" placeholder="Claim, customer or policy ID" aria-label="Search">
+          <select id="f-csort" aria-label="Sort"><option value="level-desc">Sort: highest level first</option><option value="level-asc">Sort: lowest level first</option><option value="date-desc">Sort: newest opened first</option><option value="date-asc">Sort: oldest opened first</option></select>
+          <span class="spacer"></span>
+          <span class="hint" id="claim-count"></span>
+          <button class="button" type="button" id="claim-csv">Download list (CSV)</button>
+        </div>
+        <div class="table-wrap"><table class="ledger watch-table" id="claim-table"></table></div>
+        <div class="row"><button class="button" type="button" id="claim-more">Show more</button></div>
+      </div>
+
+      <div class="subpane" id="sub-retention" hidden>
+        <div class="tiles" id="ret-tiles"></div>
+        <section class="panel">
+          <div class="panel-head"><h2>Clients to call, by adjuster team</h2><p class="hint">Which office is making clients wait.</p></div>
+          <div class="chart-box short"><canvas id="chart-ret-alerts"></canvas></div>
+        </section>
+        <div class="toolbar">
+          <select id="f-priority" aria-label="Priority"><option value="">All priorities</option><option>Urgent</option><option>High</option><option>Standard</option><option>Win-back</option></select>
+          <select id="f-team" aria-label="Adjuster team"><option value="">All teams</option></select>
+          <select id="f-rstatus" aria-label="Status"><option value="">Any status</option></select>
+          <input type="search" id="f-rsearch" placeholder="Customer, claim or policy ID" aria-label="Search">
+          <select id="f-rsort" aria-label="Sort"><option value="level-desc">Sort: most urgent first</option><option value="level-asc">Sort: least urgent first</option><option value="date-desc">Sort: newest opened first</option><option value="date-asc">Sort: oldest opened first</option></select>
+          <span class="spacer"></span>
+          <span class="hint" id="ret-count"></span>
+          <button class="button" type="button" id="ret-csv">Download call list (CSV)</button>
+        </div>
+        <div class="table-wrap"><table class="ledger watch-table" id="ret-table"></table></div>
+        <div class="row"><button class="button" type="button" id="ret-more">Show more</button></div>
+      </div>
+
+      <div class="subpane" id="sub-segments" hidden>
+        <div class="toolbar">
+          <label class="hint" for="alert-filter">Show</label>
+          <select id="alert-filter"><option value="">All alerts</option><option>New</option><option>Acknowledged</option><option>Resolved</option></select>
+          <select id="f-ssort" aria-label="Sort"><option value="level-desc">Sort: most severe first</option><option value="level-asc">Sort: least severe first</option><option value="date-desc">Sort: newest opened first</option><option value="date-asc">Sort: oldest opened first</option></select>
+        </div>
+        <div id="alerts-body"></div>
+      </div>
+
+      <div class="subpane" id="sub-messages" hidden>
+        <p class="hint" style="margin-top:1rem">One message per person per check, only for alerts not seen before. Set ALERT_WEBHOOK_URL to also post them to a team chat.</p>
         <div id="outbox-body"></div>
-      </section>
+      </div>
+
+      <details class="more" id="rules-box">
+        <summary>Alert rules</summary>
+        <p class="hint" style="margin-top:.4rem">Change a number and press Apply. Every claim is re-checked straight away; rule changes don’t send messages.</p>
+        <h3>Claim alerts</h3>
+        <div class="rules-grid">
+          <label>Watched brokers (Level 1)<input type="text" id="w-watchlist" placeholder="B07"></label>
+          <label>Repeat claimant from claim no.<input type="number" id="w-repeat_claims" min="2" step="1"></label>
+          <label>… for a watched broker<input type="number" id="w-repeat_claims_watched" min="1" step="1"></label>
+          <label>Under review line: from ($)<input type="number" id="w-band_low" min="0" step="100"></label>
+          <label>… to ($)<input type="number" id="w-band_high" min="0" step="100"></label>
+          <label>Paid fast: claim over ($)<input type="number" id="w-fast_amount" min="0" step="100"></label>
+          <label>… settled in under (days)<input type="number" id="w-fast_days" min="1" step="1"></label>
+        </div>
+        <h3>Retention calls</h3>
+        <div class="rules-grid">
+          <label>Small claim: under ($)<input type="number" id="w-ret_small" min="0" step="100"></label>
+          <label>… call after (days)<input type="number" id="w-ret_small_days" min="1" step="1"></label>
+          <label>Middle claim: call after (days)<input type="number" id="w-ret_mid_days" min="1" step="1"></label>
+          <label>Large claim: over ($)<input type="number" id="w-ret_large" min="0" step="100"></label>
+          <label>… call after (days)<input type="number" id="w-ret_large_days" min="1" step="1"></label>
+        </div>
+        <div class="row">
+          <button class="button primary" type="button" id="rules-apply">Apply rules</button>
+          <button class="button" type="button" id="rules-reset">Back to defaults</button>
+        </div>
+      </details>
     </div>
   </section>
 
@@ -226,7 +314,7 @@
     <div class="page">
       <div class="page-intro">
         <h1>Data notes</h1>
-        <p>What was fixed in the raw extracts, how every number is calculated, and what the data can't tell us.</p>
+        <p>What was fixed in the raw extracts, how every number and alert is calculated, and what the data can’t tell us.</p>
       </div>
       <section class="panel">
         <h2>How the original extract was cleaned</h2>
@@ -245,19 +333,21 @@
           <dt>Open claims</dt><dd>Claims not settled yet, set aside at the claim amount minus the deductible. Prudent: historically about 95% of that is paid.</dd>
           <dt>Loss ratio</dt><dd>Claims (paid plus open) ÷ premium earned.</dd>
           <dt>Commission and costs</dt><dd>Assumptions, not in the data: broker commission on premium sold by brokers, and operating costs on all premium. Change them under Filters.</dd>
-          <dt>Result after costs</dt><dd>Premium earned minus claims, commission and operating costs. Shown in parentheses and red ink when negative.</dd>
-          <dt>Combined ratio</dt><dd>(Claims + commission + costs) ÷ premium earned. Above 100% means losing money.</dd>
-          <dt>Chance of bad luck</dt><dd>How likely a loss this size is from normal randomness alone, using the book's own claim sizes over the last year (a compound Poisson model). The check only flags losses where this is under 5%.</dd>
+          <dt>Result after costs</dt><dd>Premium earned minus claims, commission and operating costs. Shown in parentheses and red when negative.</dd>
+          <dt>Claim number</dt><dd>Each customer’s claims counted in loss-date order across all their policies: 1st, 2nd, 3rd and later (3rd+).</dd>
+          <dt>Claim alerts</dt><dd>Level 1: every claim from a watched broker (B07). Level 2: a customer’s 3rd claim or later (2nd for a watched broker). Level 3: a claim between $8,000 and $10,000, any channel. Level 4: a claim over $4,000 settled in under 14 days. Each claim gets its highest level.</dd>
+          <dt>Retention calls</dt><dd>A decision that took more than 20 days on a claim under $3,000, more than 30 days from $3,000 to $8,000, or more than 45 days over $8,000. Claims still open past the limit count too.</dd>
+          <dt>Chance of bad luck</dt><dd>For segment alerts: how likely a loss this size is from normal randomness alone, using the book’s own claim sizes (a compound Poisson model). Segments are only flagged when this is under 5%.</dd>
         </dl>
       </section>
       <section class="panel">
-        <h2>What the data can't tell us</h2>
+        <h2>What the data can’t tell us</h2>
         <ul class="limits">
-          <li>Operating costs and commission rates aren't in the extract, so results after costs depend on the assumptions.</li>
-          <li>Cancelled policies have no cancellation date, so they're counted as covered for the full year (2.9% of policies).</li>
-          <li>Renewal terms aren't separate rows: every claim in the data falls in a policy's first year, so only first-year premium is counted.</li>
+          <li>Operating costs and commission rates aren’t in the extract, so results after costs depend on the assumptions.</li>
+          <li>Cancelled policies have no cancellation date, so they’re counted as covered for the full year (2.9% of policies).</li>
+          <li>Renewal terms aren’t separate rows: every claim in the data falls in a policy’s first year, so only first-year premium is counted.</li>
           <li>Claims for the most recent months are still coming in, so the latest quarter can look better than it will end up.</li>
-          <li>A cluster of claims under $10,000 is a reason to review, not proof of fraud.</li>
+          <li>A claim alert is a reason to review, not proof of fraud.</li>
         </ul>
       </section>
     </div>
